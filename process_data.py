@@ -1860,11 +1860,36 @@ def get_dashboard_html_template():
 
         // Tab 3: Detail SLS (with pagination)
         function renderDetailTab(tabDiv, filteredData) {
+            // De-duplicate by SLS Code to show only one row per SLS
+            const uniqueDetailMap = new Map();
+            filteredData.forEach(row => {
+                const slsCode = row["SLS Code"];
+                if (!slsCode) {
+                    const key = "blank_" + row.Email;
+                    uniqueDetailMap.set(key, row);
+                    return;
+                }
+                if (!uniqueDetailMap.has(slsCode)) {
+                    uniqueDetailMap.set(slsCode, { ...row });
+                } else {
+                    const existing = uniqueDetailMap.get(slsCode);
+                    const existingRole = getNormalizedRole(existing);
+                    const currentRole = getNormalizedRole(row);
+                    if (existingRole === 'PML' && currentRole === 'PPL') {
+                        existing.Email = row.Email;
+                        existing.Category = row.Category;
+                        existing.nama_petugas = row.nama_petugas;
+                        existing.jabatan_petugas = row.jabatan_petugas;
+                    }
+                }
+            });
+            const dedupedData = Array.from(uniqueDetailMap.values());
+
             // Sort
-            sortDataset(filteredData, sortDetField, sortDetAsc);
+            sortDataset(dedupedData, sortDetField, sortDetAsc);
             
             // Pagination math
-            const totalItems = filteredData.length;
+            const totalItems = dedupedData.length;
             const totalPages = Math.ceil(totalItems / detailItemsPerPage);
             
             if (detailCurrentPage > totalPages) {
@@ -1873,7 +1898,7 @@ def get_dashboard_html_template():
             
             const startIndex = (detailCurrentPage - 1) * detailItemsPerPage;
             const endIndex = Math.min(startIndex + detailItemsPerPage, totalItems);
-            const paginatedData = filteredData.slice(startIndex, endIndex);
+            const paginatedData = dedupedData.slice(startIndex, endIndex);
             
             if (totalItems === 0) {
                 renderEmptyState(tabDiv);
