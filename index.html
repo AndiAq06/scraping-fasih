@@ -589,7 +589,7 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
                     </svg>
-                    Terakhir Diperbarui: <strong id="timestampText">19 Juni 2026 pukul 23.09 WITA</strong>
+                    Terakhir Diperbarui: <strong id="timestampText">19 Juni 2026 pukul 23.17 WITA</strong>
                 </div>
             </div>
         </header>
@@ -607,7 +607,7 @@
                     </div>
                     <div class="progress-info">
                         <span id="kpiProgressRatio">0 / 0 SLS</span>
-                        <span id="kpiProgressText">Approved + Submitted</span>
+                        <span id="kpiProgressText">Approved + Submitted + Rejected</span>
                     </div>
                 </div>
             </div>
@@ -903,7 +903,7 @@
             document.getElementById('kpiApproved').textContent = totalApproved.toLocaleString('id-ID');
             
             // Progress Calculation
-            const completed = totalApproved + totalSubmitted;
+            const completed = totalApproved + totalSubmitted + totalRejected;
             const progressPct = totalTarget > 0 ? (completed / totalTarget) * 100 : 0;
             
             document.getElementById('kpiProgressPct').textContent = progressPct.toFixed(2) + '%';
@@ -1057,7 +1057,7 @@
             
             // Calculate progress rate and assign to list
             kecList.forEach(k => {
-                const comp = k.APPROVED + k.SUBMITTED;
+                const comp = k.APPROVED + k.SUBMITTED + k.REJECTED;
                 k.progress_rate = k.total_sls > 0 ? (comp / k.total_sls) * 100 : 0;
             });
             
@@ -1172,7 +1172,7 @@
             const petList = Object.values(petMap);
             
             petList.forEach(p => {
-                const comp = p.APPROVED + p.SUBMITTED;
+                const comp = p.APPROVED + p.SUBMITTED + p.REJECTED;
                 p.progress_rate = p.total_sls > 0 ? (comp / p.total_sls) * 100 : 0;
             });
             

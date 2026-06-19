@@ -1215,7 +1215,7 @@ def get_dashboard_html_template():
                     </div>
                     <div class="progress-info">
                         <span id="kpiProgressRatio">0 / 0 SLS</span>
-                        <span id="kpiProgressText">Approved + Submitted</span>
+                        <span id="kpiProgressText">Approved + Submitted + Rejected</span>
                     </div>
                 </div>
             </div>
@@ -1511,7 +1511,7 @@ def get_dashboard_html_template():
             document.getElementById('kpiApproved').textContent = totalApproved.toLocaleString('id-ID');
             
             // Progress Calculation
-            const completed = totalApproved + totalSubmitted;
+            const completed = totalApproved + totalSubmitted + totalRejected;
             const progressPct = totalTarget > 0 ? (completed / totalTarget) * 100 : 0;
             
             document.getElementById('kpiProgressPct').textContent = progressPct.toFixed(2) + '%';
@@ -1665,7 +1665,7 @@ def get_dashboard_html_template():
             
             // Calculate progress rate and assign to list
             kecList.forEach(k => {
-                const comp = k.APPROVED + k.SUBMITTED;
+                const comp = k.APPROVED + k.SUBMITTED + k.REJECTED;
                 k.progress_rate = k.total_sls > 0 ? (comp / k.total_sls) * 100 : 0;
             });
             
@@ -1780,7 +1780,7 @@ def get_dashboard_html_template():
             const petList = Object.values(petMap);
             
             petList.forEach(p => {
-                const comp = p.APPROVED + p.SUBMITTED;
+                const comp = p.APPROVED + p.SUBMITTED + p.REJECTED;
                 p.progress_rate = p.total_sls > 0 ? (comp / p.total_sls) * 100 : 0;
             });
             
