@@ -79,6 +79,26 @@ def load_priority_sls():
         print(f"Error loading priority SLS codes: {e}")
         return set()
 
+def load_muatan_wilkerstat():
+    excel_file = "muatan_wilkerstat.xlsx"
+    muatan_map = {}
+    if not os.path.exists(excel_file):
+        print(f"Warning: Wilkerstat capacity file '{excel_file}' not found.")
+        return muatan_map
+    try:
+        import pandas as pd
+        df = pd.read_excel(excel_file)
+        for _, row in df.iterrows():
+            idsls_val = row.get('idsls')
+            muatan_val = row.get('muatan')
+            if pd.notna(idsls_val) and pd.notna(muatan_val):
+                idsls_str = str(int(idsls_val)).strip()
+                muatan_map[idsls_str] = int(muatan_val)
+        print(f"Loaded {len(muatan_map)} Wilkerstat SLS capacity mappings.")
+    except Exception as e:
+        print(f"Error loading Wilkerstat capacity: {e}")
+    return muatan_map
+
 def process_dashboard_scraped_data(priority_sls=None):
     if priority_sls is None:
         priority_sls = load_priority_sls()
@@ -139,6 +159,9 @@ def process_dashboard_scraped_data(priority_sls=None):
         print(f"Error reading pml_ppl file: {e}")
         return False
 
+    # 2b. Load Wilkerstat capacity mapping
+    muatan_map = load_muatan_wilkerstat()
+
     # 3. Read and process dashboard_scraped_data.csv
     print(f"Processing '{scraped_file}'...")
     processed_rows = []
@@ -152,8 +175,8 @@ def process_dashboard_scraped_data(priority_sls=None):
                 print("Error: dashboard_scraped_data.csv is empty.")
                 return False
             
-            # Original 8 headers, we will append the 5 additional headers
-            additional_headers = ['nama_petugas', 'jabatan_petugas', 'nama_kec', 'koseka', 'is_prioritas']
+            # Original 8 headers, we will append the 6 additional headers
+            additional_headers = ['nama_petugas', 'jabatan_petugas', 'nama_kec', 'koseka', 'is_prioritas', 'muatan_wilkerstat']
             base_headers = headers[:8]
             output_headers = base_headers + additional_headers
             
@@ -198,7 +221,11 @@ def process_dashboard_scraped_data(priority_sls=None):
                 sls_14 = digits_only[:14]
                 is_prioritas = "Ya" if sls_14 in priority_sls else "Tidak"
                 
-                new_row = base_row + [nama_petugas, jabatan_petugas, nama_kec, koseka, is_prioritas]
+                # Match SLS Code in Wilkerstat capacity map
+                sls_16 = digits_only[:16]
+                muatan_val = muatan_map.get(sls_16, 0)
+                
+                new_row = base_row + [nama_petugas, jabatan_petugas, nama_kec, koseka, is_prioritas, str(muatan_val)]
                 processed_rows.append(new_row)
                 
         # Write processed data back to dashboard_scraped_data.csv
@@ -450,7 +477,7 @@ def generate_local_dashboard():
                 reader = csv.DictReader(f)
                 for row in reader:
                     # Clean and parse numeric values
-                    for col in ["OPEN", "DRAFT", "SUBMITTED BY Pencacah", "REJECTED BY Pengawas", "APPROVED BY Pengawas"]:
+                    for col in ["OPEN", "DRAFT", "SUBMITTED BY Pencacah", "REJECTED BY Pengawas", "APPROVED BY Pengawas", "muatan_wilkerstat"]:
                         if col in row:
                             try:
                                 row[col] = int(row[col])
@@ -524,7 +551,8 @@ def generate_local_dashboard():
                 "jabatan_petugas": jabatan_petugas,
                 "nama_kec": nama_kec,
                 "koseka": "",
-                "is_prioritas": "Tidak"
+                "is_prioritas": "Tidak",
+                "muatan_wilkerstat": 0
             }
             scraped_data.append(blank_row)
             missing_count += 1
@@ -1480,7 +1508,8 @@ def get_dashboard_html_template():
                             DRAFT: parseInt(row.DRAFT) || 0,
                             SUBMITTED: parseInt(row["SUBMITTED BY Pencacah"]) || 0,
                             REJECTED: parseInt(row["REJECTED BY Pengawas"]) || 0,
-                            APPROVED: parseInt(row["APPROVED BY Pengawas"]) || 0
+                            APPROVED: parseInt(row["APPROVED BY Pengawas"]) || 0,
+                            muatan: parseInt(row.muatan_wilkerstat) || 0
                         });
                     }
                 }
@@ -1491,6 +1520,7 @@ def get_dashboard_html_template():
             let totalSubmitted = 0;
             let totalRejected = 0;
             let totalApproved = 0;
+            let totalMuatan = 0;
             
             uniqueSlsMap.forEach(val => {
                 totalOpen += val.OPEN;
@@ -1498,12 +1528,11 @@ def get_dashboard_html_template():
                 totalSubmitted += val.SUBMITTED;
                 totalRejected += val.REJECTED;
                 totalApproved += val.APPROVED;
+                totalMuatan += val.muatan;
             });
             
-            let totalTarget = totalOpen + totalDraft + totalSubmitted + totalRejected + totalApproved;
-            
             // Update fields
-            document.getElementById('kpiTotalSLS').textContent = totalTarget.toLocaleString('id-ID');
+            document.getElementById('kpiTotalSLS').textContent = totalMuatan.toLocaleString('id-ID');
             document.getElementById('kpiOpen').textContent = totalOpen.toLocaleString('id-ID');
             document.getElementById('kpiDraft').textContent = totalDraft.toLocaleString('id-ID');
             document.getElementById('kpiSubmitted').textContent = totalSubmitted.toLocaleString('id-ID');
@@ -1512,10 +1541,10 @@ def get_dashboard_html_template():
             
             // Progress Calculation
             const completed = totalApproved + totalSubmitted + totalRejected;
-            const progressPct = totalTarget > 0 ? (completed / totalTarget) * 100 : 0;
+            const progressPct = totalMuatan > 0 ? (completed / totalMuatan) * 100 : 0;
             
             document.getElementById('kpiProgressPct').textContent = progressPct.toFixed(2) + '%';
-            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${totalTarget.toLocaleString('id-ID')} Rincian Usaha`;
+            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${totalMuatan.toLocaleString('id-ID')} Rincian Usaha`;
             document.getElementById('kpiProgressBar').style.width = progressPct.toFixed(2) + '%';
         }
 
@@ -1639,6 +1668,7 @@ def get_dashboard_html_template():
                     kecMap[kecName] = {
                         nama_kec: kecName,
                         total_sls: 0,
+                        muatan: 0,
                         OPEN: 0,
                         DRAFT: 0,
                         SUBMITTED: 0,
@@ -1652,6 +1682,7 @@ def get_dashboard_html_template():
                 const sub = parseInt(row["SUBMITTED BY Pencacah"]) || 0;
                 const rej = parseInt(row["REJECTED BY Pengawas"]) || 0;
                 const app = parseInt(row["APPROVED BY Pengawas"]) || 0;
+                const muatan = parseInt(row.muatan_wilkerstat) || 0;
                 
                 kecMap[kecName].OPEN += open;
                 kecMap[kecName].DRAFT += draft;
@@ -1659,6 +1690,7 @@ def get_dashboard_html_template():
                 kecMap[kecName].REJECTED += rej;
                 kecMap[kecName].APPROVED += app;
                 kecMap[kecName].total_sls += (open + draft + sub + rej + app);
+                kecMap[kecName].muatan += muatan;
             });
             
             const kecList = Object.values(kecMap);
@@ -1666,7 +1698,7 @@ def get_dashboard_html_template():
             // Calculate progress rate and assign to list
             kecList.forEach(k => {
                 const comp = k.APPROVED + k.SUBMITTED + k.REJECTED;
-                k.progress_rate = k.total_sls > 0 ? (comp / k.total_sls) * 100 : 0;
+                k.progress_rate = k.muatan > 0 ? (comp / k.muatan) * 100 : 0;
             });
             
             // Sort
@@ -1687,6 +1719,7 @@ def get_dashboard_html_template():
                                     <th class="no-sort" style="width: 50px;">No</th>
                                     <th onclick="handleKecSort('nama_kec')">Kecamatan ${getSortArrow('nama_kec', sortKecField, sortKecAsc)}</th>
                                     <th onclick="handleKecSort('total_sls')">Total Target SLS ${getSortArrow('total_sls', sortKecField, sortKecAsc)}</th>
+                                    <th onclick="handleKecSort('muatan')">Muatan Wilkerstat ${getSortArrow('muatan', sortKecField, sortKecAsc)}</th>
                                     <th onclick="handleKecSort('OPEN')">Open ${getSortArrow('OPEN', sortKecField, sortKecAsc)}</th>
                                     <th onclick="handleKecSort('DRAFT')">Draft ${getSortArrow('DRAFT', sortKecField, sortKecAsc)}</th>
                                     <th onclick="handleKecSort('SUBMITTED')">Submitted ${getSortArrow('SUBMITTED', sortKecField, sortKecAsc)}</th>
@@ -1704,6 +1737,7 @@ def get_dashboard_html_template():
                         <td>${idx + 1}</td>
                         <td style="font-weight: 600; color: var(--primary)">${kec.nama_kec}</td>
                         <td style="font-weight: 500;">${kec.total_sls.toLocaleString('id-ID')}</td>
+                        <td style="font-weight: 500; color: #475569;">${kec.muatan.toLocaleString('id-ID')}</td>
                         <td class="txt-open">${kec.OPEN.toLocaleString('id-ID')}</td>
                         <td class="txt-draft">${kec.DRAFT.toLocaleString('id-ID')}</td>
                         <td class="txt-submitted">${kec.SUBMITTED.toLocaleString('id-ID')}</td>
@@ -1755,6 +1789,7 @@ def get_dashboard_html_template():
                         nama_petugas: row.nama_petugas || row.Email || 'Belum Ditentukan',
                         jabatan_petugas: getNormalizedRole(row),
                         total_sls: 0,
+                        muatan: 0,
                         OPEN: 0,
                         DRAFT: 0,
                         SUBMITTED: 0,
@@ -1768,6 +1803,7 @@ def get_dashboard_html_template():
                 const sub = parseInt(row["SUBMITTED BY Pencacah"]) || 0;
                 const rej = parseInt(row["REJECTED BY Pengawas"]) || 0;
                 const app = parseInt(row["APPROVED BY Pengawas"]) || 0;
+                const muatan = parseInt(row.muatan_wilkerstat) || 0;
                 
                 petMap[key].OPEN += open;
                 petMap[key].DRAFT += draft;
@@ -1775,13 +1811,14 @@ def get_dashboard_html_template():
                 petMap[key].REJECTED += rej;
                 petMap[key].APPROVED += app;
                 petMap[key].total_sls += (open + draft + sub + rej + app);
+                petMap[key].muatan += muatan;
             });
             
             const petList = Object.values(petMap);
             
             petList.forEach(p => {
                 const comp = p.APPROVED + p.SUBMITTED + p.REJECTED;
-                p.progress_rate = p.total_sls > 0 ? (comp / p.total_sls) * 100 : 0;
+                p.progress_rate = p.muatan > 0 ? (comp / p.muatan) * 100 : 0;
             });
             
             sortDataset(petList, sortPetField, sortPetAsc);
@@ -1802,6 +1839,7 @@ def get_dashboard_html_template():
                                     <th onclick="handlePetSort('email')">Email ${getSortArrow('email', sortPetField, sortPetAsc)}</th>
                                     <th onclick="handlePetSort('jabatan_petugas')">Peran ${getSortArrow('jabatan_petugas', sortPetField, sortPetAsc)}</th>
                                     <th onclick="handlePetSort('total_sls')">Total SLS ${getSortArrow('total_sls', sortPetField, sortPetAsc)}</th>
+                                    <th onclick="handlePetSort('muatan')">Muatan Wilkerstat ${getSortArrow('muatan', sortPetField, sortPetAsc)}</th>
                                     <th onclick="handlePetSort('OPEN')">Open ${getSortArrow('OPEN', sortPetField, sortPetAsc)}</th>
                                     <th onclick="handlePetSort('DRAFT')">Draft ${getSortArrow('DRAFT', sortPetField, sortPetAsc)}</th>
                                     <th onclick="handlePetSort('SUBMITTED')">Submitted ${getSortArrow('SUBMITTED', sortPetField, sortPetAsc)}</th>
@@ -1821,6 +1859,7 @@ def get_dashboard_html_template():
                         <td style="color: var(--text-muted)">${pet.email}</td>
                         <td><span class="badge badge-role">${pet.jabatan_petugas}</span></td>
                         <td style="font-weight: 500;">${pet.total_sls.toLocaleString('id-ID')}</td>
+                        <td style="font-weight: 500; color: #475569;">${pet.muatan.toLocaleString('id-ID')}</td>
                         <td class="txt-open">${pet.OPEN.toLocaleString('id-ID')}</td>
                         <td class="txt-draft">${pet.DRAFT.toLocaleString('id-ID')}</td>
                         <td class="txt-submitted">${pet.SUBMITTED.toLocaleString('id-ID')}</td>
