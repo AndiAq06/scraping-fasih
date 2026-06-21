@@ -2137,6 +2137,16 @@ def get_dashboard_html_template():
             });
             const dedupedData = Array.from(uniqueDetailMap.values());
 
+            // Calculate progress rate for each SLS before sorting
+            dedupedData.forEach(row => {
+                const sub = parseInt(row["SUBMITTED BY Pencacah"]) || 0;
+                const rej = parseInt(row["REJECTED BY Pengawas"]) || 0;
+                const app = parseInt(row["APPROVED BY Pengawas"]) || 0;
+                const muatan = parseInt(row.muatan_wilkerstat) || 0;
+                const comp = app + sub + rej;
+                row.progress_rate = muatan > 0 ? (comp / muatan) * 100 : 0;
+            });
+
             // Sort
             sortDataset(dedupedData, sortDetField, sortDetAsc);
             
@@ -2168,7 +2178,6 @@ def get_dashboard_html_template():
                                     <th onclick="handleDetSort('nama_petugas')">Nama Petugas ${getSortArrow('nama_petugas', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('Category')">Peran ${getSortArrow('Category', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('nama_kec')">Kecamatan ${getSortArrow('nama_kec', sortDetField, sortDetAsc)}</th>
-                                    <th onclick="handleDetSort('koseka')">Koseka ${getSortArrow('koseka', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('is_prioritas')">Prioritas ${getSortArrow('is_prioritas', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('muatan_wilkerstat')">Muatan ${getSortArrow('muatan_wilkerstat', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('OPEN')">Open ${getSortArrow('OPEN', sortDetField, sortDetAsc)}</th>
@@ -2176,6 +2185,7 @@ def get_dashboard_html_template():
                                     <th onclick="handleDetSort('SUBMITTED BY Pencacah')">Submitted ${getSortArrow('SUBMITTED BY Pencacah', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('REJECTED BY Pengawas')">Rejected ${getSortArrow('REJECTED BY Pengawas', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('APPROVED BY Pengawas')">Approved ${getSortArrow('APPROVED BY Pengawas', sortDetField, sortDetAsc)}</th>
+                                    <th onclick="handleDetSort('progress_rate')">Progress Rate ${getSortArrow('progress_rate', sortDetField, sortDetAsc)}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2193,7 +2203,6 @@ def get_dashboard_html_template():
                         <td style="font-weight: 500; color: var(--primary)">${row.nama_petugas || '-'}</td>
                         <td><span class="badge badge-role">${getNormalizedRole(row)}</span></td>
                         <td>${row.nama_kec || '-'}</td>
-                        <td style="font-size: 0.8125rem;">${row.koseka || '-'}</td>
                         <td>${priorBadge}</td>
                         <td>${row.muatan_wilkerstat}</td>
                         <td class="txt-open">${row.OPEN}</td>
@@ -2201,6 +2210,14 @@ def get_dashboard_html_template():
                         <td class="txt-submitted">${row["SUBMITTED BY Pencacah"]}</td>
                         <td class="txt-rejected">${row["REJECTED BY Pengawas"]}</td>
                         <td class="txt-approved">${row["APPROVED BY Pengawas"]}</td>
+                        <td>
+                            <div class="progress-cell">
+                                <div class="progress-bar-cell-bg">
+                                    <div class="progress-bar-cell-fill" style="width: ${row.progress_rate.toFixed(1)}%"></div>
+                                </div>
+                                <span class="progress-percent-text">${row.progress_rate.toFixed(1)}%</span>
+                            </div>
+                        </td>
                     </tr>
                 `;
             });
