@@ -590,7 +590,7 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
                     </svg>
-                    Terakhir Diperbarui: <strong id="timestampText">25 Juni 2026 pukul 10.05 WITA</strong>
+                    Terakhir Diperbarui: <strong id="timestampText">25 Juni 2026 pukul 10.15 WITA</strong>
                 </div>
             </div>
         </header>
@@ -942,10 +942,10 @@
             
             // Progress Calculation
             const completed = valApproved + valSubmitted + valRejected;
-            const progressPct = scrapedTargetMuatan > 0 ? (completed / scrapedTargetMuatan) * 100 : 0;
+            const progressPct = totalMuatan > 0 ? (completed / totalMuatan) * 100 : 0;
             
             document.getElementById('kpiProgressPct').textContent = progressPct.toFixed(2) + '%';
-            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${scrapedTargetMuatan.toLocaleString('id-ID')} Rincian Usaha`;
+            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${totalMuatan.toLocaleString('id-ID')} Rincian Usaha`;
             document.getElementById('kpiProgressBar').style.width = progressPct.toFixed(2) + '%';
         }
 

@@ -1752,10 +1752,10 @@ def get_dashboard_html_template():
             
             // Progress Calculation
             const completed = valApproved + valSubmitted + valRejected;
-            const progressPct = scrapedTargetMuatan > 0 ? (completed / scrapedTargetMuatan) * 100 : 0;
+            const progressPct = totalMuatan > 0 ? (completed / totalMuatan) * 100 : 0;
             
             document.getElementById('kpiProgressPct').textContent = progressPct.toFixed(2) + '%';
-            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${scrapedTargetMuatan.toLocaleString('id-ID')} Rincian Usaha`;
+            document.getElementById('kpiProgressRatio').textContent = `${completed.toLocaleString('id-ID')} / ${totalMuatan.toLocaleString('id-ID')} Rincian Usaha`;
             document.getElementById('kpiProgressBar').style.width = progressPct.toFixed(2) + '%';
         }
 
