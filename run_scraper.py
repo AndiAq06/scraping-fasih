@@ -4,8 +4,105 @@ import csv
 import sys
 import time
 import json
+import random
+import socket
+import subprocess
+import atexit
 from playwright.sync_api import sync_playwright
 import process_data
+
+chrome_proc = None
+
+@atexit.register
+def cleanup_chrome():
+    global chrome_proc
+    if chrome_proc:
+        try:
+            if sys.platform == "win32":
+                subprocess.call(["taskkill", "/F", "/T", "/PID", str(chrome_proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                chrome_proc.terminate()
+                chrome_proc.wait(timeout=3)
+        except Exception:
+            try:
+                chrome_proc.kill()
+            except Exception:
+                pass
+
+def get_free_port():
+    s = socket.socket()
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+def find_chrome_path():
+    paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+def launch_native_chrome(p, user_data_dir="chrome_profile"):
+    global chrome_proc
+    
+    # Clean up orphaned processes using this profile to prevent locks on Windows
+    if sys.platform == "win32":
+        try:
+            profile_pattern = os.path.basename(user_data_dir)
+            subprocess.call(['powershell', '-Command', f'Get-CimInstance Win32_Process -Filter "CommandLine like \'%{profile_pattern}%\'" | Remove-CimInstance'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+            
+    chrome_path = find_chrome_path()
+    if not chrome_path:
+        print("ERROR: Google Chrome was not found.", file=sys.stderr)
+        sys.exit(1)
+        
+    abs_user_data_dir = os.path.abspath(user_data_dir)
+    os.makedirs(abs_user_data_dir, exist_ok=True)
+    
+    port = get_free_port()
+    print(f"Launching native Chrome on port {port} using profile in '{user_data_dir}'...")
+    
+    cmd = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={abs_user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check"
+    ]
+    
+    proc = subprocess.Popen(cmd)
+    chrome_proc = proc
+    
+    # Wait for Chrome to start
+    retries = 10
+    connected = False
+    while retries > 0:
+        time.sleep(0.5)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                connected = True
+                break
+        except Exception:
+            retries -= 1
+            
+    if not connected:
+        print("ERROR: Failed to connect to the launched Chrome instance.", file=sys.stderr)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        sys.exit(1)
+        
+    print("Connecting Playwright to the Chrome instance...")
+    browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+    return browser, proc
 
 def load_emails(file_path):
     if not os.path.exists(file_path):
@@ -232,22 +329,22 @@ def run_scraper(use_test_emails=False):
         
     print(f"Output will be saved/appended to '{output_csv}'")
     
+    # Clear Chrome profile if starting fresh
+    if "--fresh" in sys.argv:
+        print("Fresh run requested. Clearing existing Chrome profile...")
+        profile_dir = os.path.abspath("chrome_profile")
+        if os.path.exists(profile_dir):
+            try:
+                import shutil
+                shutil.rmtree(profile_dir)
+                print("Chrome profile cleared.")
+            except Exception as e:
+                print(f"Warning: could not clear Chrome profile: {e}")
+
     with sync_playwright() as p:
-        print("Launching browser...")
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        
-        # Load saved session if it exists
-        if os.path.exists(auth_file):
-            print(f"Loading session from '{auth_file}'...")
-            context = browser.new_context(storage_state=auth_file)
-        else:
-            print("No saved session found. Launching a fresh browser context.")
-            context = browser.new_context()
-            
-        page = context.new_page()
+        browser, chrome_proc = launch_native_chrome(p, "chrome_profile")
+        context = browser.contexts[0]
+        page = context.pages[0] if context.pages else context.new_page()
         
         # Open BPS FASIH
         print("Navigating to BPS FASIH website...")
@@ -305,92 +402,144 @@ def run_scraper(use_test_emails=False):
             csv_file.close()
             return
             
+        # Get period_id from active URL
+        current_url = page.url
+        match = re.search(r"/app/surveys/([^/]+)/([^/]+)/data", current_url)
+        if not match:
+            print("Error: Could not parse survey ID and period ID from URL. URL: " + current_url)
+            browser.close()
+            csv_file.close()
+            return
+        survey_id = match.group(1)
+        period_id = match.group(2)
+        print(f"Parsed Survey ID: {survey_id}, Period ID: {period_id}")
+
+        js_fetch_script = """
+            async (params) => {
+                const { email, periodId } = params;
+                const xsrfToken = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='))?.split('=')[1] || '';
+                
+                let allRecords = [];
+                let start = 0;
+                const length = 100;
+                
+                while (true) {
+                    const payload = {
+                        "start": start,
+                        "length": length,
+                        "columns": [
+                            {"data": "id", "orderable": true},
+                            {"data": "codeIdentity", "orderable": true},
+                            {"data": "data1", "orderable": true},
+                            {"data": "data2", "orderable": true},
+                            {"data": "data3", "orderable": true},
+                            {"data": "data4", "orderable": true},
+                            {"data": "data5", "orderable": true},
+                            {"data": "data6", "orderable": true},
+                            {"data": "data7", "orderable": true},
+                            {"data": "data8", "orderable": true},
+                            {"data": "data9", "orderable": true},
+                            {"data": "data10", "orderable": true}
+                        ],
+                        "order": [],
+                        "search": {
+                            "value": email,
+                            "regex": false
+                        },
+                        "assignmentExtraParam": {
+                            "surveyPeriodId": periodId,
+                            "assignmentErrorStatusType": -1,
+                            "filterTargetType": "TARGET_ONLY"
+                        }
+                    };
+                    
+                    const response = await fetch('/app/api/analytic/api/v2/assignment/datatable-all-user-survey-periode', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-XSRF-TOKEN': xsrfToken
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('HTTP error ' + response.status);
+                    }
+                    
+                    const result = await response.json();
+                    const dataList = result.searchData || [];
+                    allRecords.push(...dataList);
+                    
+                    const totalHit = result.totalHit || 0;
+                    if (allRecords.length >= totalHit || dataList.length === 0) {
+                        break;
+                    }
+                    
+                    start += length;
+                }
+                
+                return allRecords;
+            }
+        """
+
         # Start search looping
         for index in range(resume_index, len(emails)):
             email = emails[index]
-            print(f"[{index + 1}/{len(emails)}] Searching for: {email}")
+            print(f"[{index + 1}/{len(emails)}] Fetching detail via API for: {email}")
+            
+            # Small safety delay between requests
+            if index > resume_index:
+                delay_seconds = random.uniform(0.5, 1.2)
+                time.sleep(delay_seconds)
             
             attempts = 2
-            total_scraped = 0
             success = False
             
             for attempt in range(1, attempts + 1):
                 if attempt > 1:
                     print(f"  [Retry] Melakukan percobaan ulang ke-{attempt} untuk {email}...")
                 try:
-                    # Find search input
-                    search_input = page.locator('input[placeholder="Cari..."]')
-                    if search_input.count() == 0:
-                        print("  Search input not found! Reloading survey page...")
-                        page.goto(page.url)
-                        page.wait_for_selector("table", timeout=45000)
-                        search_input = page.locator('input[placeholder="Cari..."]')
-                        
-                    # Fill search box and press Enter
-                    search_input.click()
-                    search_input.fill("") # Clear input first
-                    search_input.fill(email)
-                    search_input.press("Enter")
+                    records = page.evaluate(js_fetch_script, {"email": email, "periodId": period_id})
                     
-                    # Wait for search results containing the searched email
-                    wait_for_table_load(page, searched_text=email)
-                    
-                    # Scrape pages
-                    page_num = 1
-                    current_scraped = 0
-                    
-                    while True:
-                        print(f"  Scraping page {page_num}...")
-                        scraped_in_page = scrape_page(page, email, csv_writer)
-                        current_scraped += scraped_in_page
-                        csv_file.flush() # Flush to disk
+                    total_scraped = 0
+                    for item in records:
+                        code_identity = item.get("codeIdentity") or "-"
+                        data1 = item.get("data1") or "-"
+                        data2 = item.get("data2") or "-"
+                        data3 = item.get("data3") or "-"
+                        data4 = item.get("data4") or "-"
+                        data5 = item.get("data5") or "-"
+                        data6 = item.get("data6") or "-"
+                        data7 = item.get("data7") or "-"
+                        data8 = item.get("data8") or "-"
+                        data9 = item.get("data9") or "-"
+                        data10 = item.get("data10") or "-"
+                        status = (item.get("assignmentStatusAlias") or "open").lower()
                         
-                        # Check next page button
-                        next_button = page.locator('button[aria-label="Go to next page"]')
-                        if next_button.count() > 0 and next_button.is_visible() and not next_button.is_disabled():
-                            print(f"  Navigating to next page...")
-                            # Capture current first row content to detect page transition
-                            prev_row_text = page.locator("table tbody tr").first.text_content() if page.locator("table tbody tr").count() > 0 else None
-                            
-                            next_button.click()
-                            page_num += 1
-                            wait_for_table_load(page, previous_first_row_text=prev_row_text)
-                        else:
-                            break
-                            
-                    total_scraped = current_scraped
-                    
-                    if total_scraped > 0:
-                        print(f"  Finished search for {email}. Total scraped: {total_scraped} rows.")
-                        success = True
-                        break
-                    else:
-                        print(f"  Peringatan: Total baris yang terambil adalah 0 untuk {email}.")
-                        # Check if first row is "Tidak ada data" placeholder to see if it's genuinely 0
-                        first_row_text = page.locator("table tbody tr").first.text_content().lower() if page.locator("table tbody tr").count() > 0 else ""
-                        is_genuine_no_data = "tidak ada data" in first_row_text or "empty" in first_row_text or "no data" in first_row_text
+                        modes = item.get("mode") or []
+                        mode = ", ".join(modes) if modes else "-"
                         
-                        if is_genuine_no_data:
-                            print(f"  Tabel menunjukkan secara valid bahwa tidak ada data untuk {email}.")
+                        username = item.get("currentUserUsername") or ""
+                        role_name = item.get("currentUserSurveyRoleName") or ""
+                        petugas = f"{username}{role_name}" if username or role_name else "-"
                         
-                        if attempt < attempts:
-                            print(f"  Mencoba kembali 1 kali lagi untuk memastikan...")
-                            # Reload the page to ensure fresh state before retry
-                            try:
-                                page.goto(page.url)
-                                page.wait_for_selector("table", timeout=45000)
-                            except Exception:
-                                pass
-                        else:
-                            print(f"  Selesai mencari untuk {email} setelah {attempts} percobaan. Total scraped: {total_scraped} rows.")
-                            success = True
-                            
+                        keterangan = "-"
+                        
+                        csv_writer.writerow([
+                            email, code_identity, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10, status, mode, petugas, keterangan
+                        ])
+                        total_scraped += 1
+                        
+                    csv_file.flush()
+                    print(f"  Finished search for {email}. Total scraped: {total_scraped} rows.")
+                    success = True
+                    break
                 except Exception as e:
                     print(f"  Error processing email {email} (Percobaan {attempt}/{attempts}): {e}")
                     if attempt < attempts:
                         print(f"  Mencoba kembali karena terjadi error...")
                         try:
-                            page.goto(page.url)
+                            page.goto(current_url)
                             page.wait_for_selector("table", timeout=45000)
                         except Exception:
                             pass
@@ -402,6 +551,7 @@ def run_scraper(use_test_emails=False):
         # Cleanup
         csv_file.close()
         browser.close()
+        cleanup_chrome()
         
         # Remove checkpoint on successful completion of all emails
         if os.path.exists(checkpoint_file):

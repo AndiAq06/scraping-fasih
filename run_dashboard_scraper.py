@@ -3,7 +3,104 @@ import csv
 import sys
 import time
 import re
+import random
+import socket
+import subprocess
+import atexit
 from playwright.sync_api import sync_playwright
+
+chrome_proc = None
+
+@atexit.register
+def cleanup_chrome():
+    global chrome_proc
+    if chrome_proc:
+        try:
+            if sys.platform == "win32":
+                subprocess.call(["taskkill", "/F", "/T", "/PID", str(chrome_proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                chrome_proc.terminate()
+                chrome_proc.wait(timeout=3)
+        except Exception:
+            try:
+                chrome_proc.kill()
+            except Exception:
+                pass
+
+def get_free_port():
+    s = socket.socket()
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+def find_chrome_path():
+    paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+def launch_native_chrome(p, user_data_dir="chrome_profile"):
+    global chrome_proc
+    
+    # Clean up orphaned processes using this profile to prevent locks on Windows
+    if sys.platform == "win32":
+        try:
+            profile_pattern = os.path.basename(user_data_dir)
+            subprocess.call(['powershell', '-Command', f'Get-CimInstance Win32_Process -Filter "CommandLine like \'%{profile_pattern}%\'" | Remove-CimInstance'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+            
+    chrome_path = find_chrome_path()
+    if not chrome_path:
+        print("ERROR: Google Chrome was not found.", file=sys.stderr)
+        sys.exit(1)
+        
+    abs_user_data_dir = os.path.abspath(user_data_dir)
+    os.makedirs(abs_user_data_dir, exist_ok=True)
+    
+    port = get_free_port()
+    print(f"Launching native Chrome on port {port} using profile in '{user_data_dir}'...")
+    
+    cmd = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={abs_user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check"
+    ]
+    
+    proc = subprocess.Popen(cmd)
+    chrome_proc = proc
+    
+    # Wait for Chrome to start
+    retries = 10
+    connected = False
+    while retries > 0:
+        time.sleep(0.5)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                connected = True
+                break
+        except Exception:
+            retries -= 1
+            
+    if not connected:
+        print("ERROR: Failed to connect to the launched Chrome instance.", file=sys.stderr)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        sys.exit(1)
+        
+    print("Connecting Playwright to the Chrome instance...")
+    browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+    return browser, proc
 
 def get_active_pagination(page):
     pag_locators = page.locator("div:has-text('Menampilkan')")
@@ -37,22 +134,22 @@ def main():
     print("FASIH DASHBOARD SCRAPER EXPERIMENT")
     print("="*70)
 
+    # Clear Chrome profile if starting fresh
+    if "--fresh" in sys.argv:
+        print("Fresh run requested. Clearing existing Chrome profile...")
+        profile_dir = os.path.abspath("chrome_profile")
+        if os.path.exists(profile_dir):
+            try:
+                import shutil
+                shutil.rmtree(profile_dir)
+                print("Chrome profile cleared.")
+            except Exception as e:
+                print(f"Warning: could not clear Chrome profile: {e}")
+
     with sync_playwright() as p:
-        print("Launching Chromium browser in headed mode...")
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        
-        # Load saved session state if exists
-        if os.path.exists(auth_file):
-            print(f"Loading session from '{auth_file}'...")
-            context = browser.new_context(storage_state=auth_file)
-        else:
-            print("No saved session state found. Creating new context.")
-            context = browser.new_context()
-            
-        page = context.new_page()
+        browser, chrome_proc = launch_native_chrome(p, "chrome_profile")
+        context = browser.contexts[0]
+        page = context.pages[0] if context.pages else context.new_page()
         
         # Open BPS FASIH Dashboard
         print(f"Navigating to dashboard page: {target_url}")
@@ -135,213 +232,146 @@ def main():
             "APPROVED BY PENGAWAS": "APPROVED BY Pengawas",
         }
         
-        last_first_email = None
-        last_pag_text = None
+        # Get survey ID and period ID from active URL
+        current_url = page.url
+        match = re.search(r"/surveys?/([^/]+)/([^/]+)", current_url)
+        if not match:
+            print(f"Error: Could not parse survey ID and period ID from URL: {current_url}")
+            survey_id = "a0429e96-51a5-477b-a415-485f9c153004"
+            period_id = "fd68e454-ba45-4b85-8205-f3bf777ded24"
+        else:
+            survey_id = match.group(1)
+            period_id = match.group(2)
+        print(f"Active Survey ID: {survey_id}, Period ID: {period_id}")
+
+        # Get role IDs
+        role_ids = {
+            "Pengawas": "93bcf446-c4c1-4462-8ed0-4b0f7ae89e52", # Fallback PML
+            "Pencacah": "6d7d919a-45e5-4779-bb87-2905b49fd31a", # Fallback PPL
+        }
+        
+        try:
+            js_roles_script = """
+                async (surveyId) => {
+                    const xsrfToken = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='))?.split('=')[1] || '';
+                    const response = await fetch(`/app/api/survey/api/v1/survey-roles?surveyId=${surveyId}`, {
+                        headers: {
+                            'X-XSRF-TOKEN': xsrfToken
+                        }
+                    });
+                    if (!response.ok) return [];
+                    return await response.json();
+                }
+            """
+            roles_data = page.evaluate(js_roles_script, survey_id)
+            if roles_data and isinstance(roles_data, list):
+                for r in roles_data:
+                    name_lower = r.get("name", "").lower()
+                    alias_lower = r.get("alias", "").lower()
+                    role_id = r.get("id")
+                    if not role_id:
+                        continue
+                    if "pengawas" in name_lower or "pml" in alias_lower:
+                        role_ids["Pengawas"] = role_id
+                    elif "pencacah" in name_lower or "ppl" in alias_lower:
+                        role_ids["Pencacah"] = role_id
+                print(f"Dynamically resolved survey roles: {role_ids}")
+        except Exception as e:
+            print(f"Warning: Failed to fetch roles dynamically: {e}. Using fallback role IDs.")
+
+        # JavaScript to fetch all pages for a role using API
+        js_rekap_script = """
+            async (params) => {
+                const { surveyPeriodId, surveyRoleId } = params;
+                const xsrfToken = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='))?.split('=')[1] || '';
+                
+                let allItems = [];
+                let pageNum = 0;
+                const size = 10;
+                
+                while (true) {
+                    const payload = {
+                        "surveyPeriodId": surveyPeriodId,
+                        "surveyRoleId": surveyRoleId,
+                        "size": size,
+                        "page": pageNum,
+                        "search": "",
+                        "target": "TARGET_ONLY",
+                        "region": {
+                            "region1Id": null, "region2Id": null, "region3Id": null, "region4Id": null, "region5Id": null,
+                            "region6Id": null, "region7Id": null, "region8Id": null, "region9Id": null, "region10Id": null
+                        },
+                        "regionSummaryLevel": 6
+                    };
+                    
+                    const response = await fetch('/app/api/analytic/api/v2/assignment/report-progress-by-responsibility', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-XSRF-TOKEN': xsrfToken
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('HTTP error ' + response.status);
+                    }
+                    
+                    const result = await response.json();
+                    const content = result.data?.content || [];
+                    allItems.push(...content);
+                    
+                    const isLast = result.data?.last ?? true;
+                    if (isLast || content.length === 0) {
+                        break;
+                    }
+                    
+                    pageNum += 1;
+                }
+                
+                return allItems;
+            }
+        """
         
         for category in ["Pengawas", "Pencacah"]:
-            print(f"\nScraping Category: {category}")
-            page.locator(f"button:has-text('{category}')").click()
+            role_id = role_ids[category]
+            print(f"\nFetching Rekap for Category {category} (Role ID: {role_id}) via API...")
             
-            # Wait for tab transition to complete if switching categories
-            if last_first_email is not None or last_pag_text is not None:
-                print(f"  Waiting for tab transition from previous category...")
-                start_transition = time.time()
-                transitioned = False
-                while time.time() - start_transition < 30.0:
-                    page.wait_for_timeout(500)
-                    cur_first_el = page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)").first
-                    cur_first = cur_first_el.locator("div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm").text_content().strip() if cur_first_el.count() > 0 else ""
-                    
-                    cur_pag_el = get_active_pagination(page)
-                    cur_pag = cur_pag_el.text_content().strip() if cur_pag_el and cur_pag_el.count() > 0 else ""
-                    
-                    if (cur_first != last_first_email or cur_pag != last_pag_text) and cur_first != "" and cur_pag != "":
-                        transitioned = True
-                        break
-                if transitioned:
-                    print("  Tab transition complete.")
-                else:
-                    print("  Warning: Tab transition timeout or no data.")
-            else:
-                # First category (Pengawas), just wait for cards to be visible
-                print("  Waiting for initial cards to load...")
-                try:
-                    page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)").first.wait_for(state="visible", timeout=60000)
-                except Exception:
-                    print("  Warning: Timeout waiting for initial cards to load.")
-                    
-            page.wait_for_timeout(1000)
-            
-            # Force reset pagination to page 1 by clicking the "1" button if available
-            page_one_btn = page.locator("a, button").filter(has_text=re.compile(r"^1$")).first
-            if page_one_btn.count() > 0 and page_one_btn.is_visible():
-                print("  Found Page 1 button, clicking to reset pagination...")
-                page_one_btn.click()
-                page.wait_for_timeout(2000)
+            try:
+                items = page.evaluate(js_rekap_script, {"surveyPeriodId": period_id, "surveyRoleId": role_id})
+                print(f"  Successfully fetched {len(items)} records via API.")
                 
-            page_num = 1
-            while True:
-                # Get first email and pag text to detect page transitions
-                first_email_el = page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)").first
-                prev_first_email = None
-                if first_email_el.count() > 0:
-                    prev_first_email = first_email_el.locator("div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm").text_content().strip()
-                
-                prev_pag_el = get_active_pagination(page)
-                prev_pag_text = prev_pag_el.text_content().strip() if prev_pag_el and prev_pag_el.count() > 0 else ""
-                
-                # Find all cards on this page
-                cards_locator = page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)")
-                card_count = cards_locator.count()
-                print(f"  [Page {page_num}] Found {card_count} cards on current page.")
-                
-                for i in range(card_count):
-                    card = cards_locator.nth(i)
-                    email = card.locator("div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm").text_content().strip()
-                    print(f"    [{i+1}/{card_count}] Scraped user: {email}")
-                    
-                    controls_id = card.get_attribute("aria-controls")
-                    if not controls_id:
-                        print("      Error: aria-controls attribute not found!")
+                for item in items:
+                    email = item.get("email") or item.get("username")
+                    if not email:
                         continue
-                        
-                    content_panel = page.locator(f"#{controls_id}")
+                    email = email.strip()
                     
-                    # Expand card if collapsed
-                    state = card.get_attribute("data-state")
-                    if state != "open":
-                        card.click()
-                        
-                    content_panel.wait_for(state="visible", timeout=10000)
-                    
-                    # Wait for SLS rows
-                    try:
-                        first_row = content_panel.locator("div.f\\:group.f\\:flex.f\\:flex-col.f\\:gap-3").first
-                        first_row.wait_for(state="visible", timeout=10000)
-                    except Exception:
-                        print("      Timeout waiting for SLS rows.")
-                        continue
-                        
-                    sls_rows = content_panel.locator("div.f\\:group.f\\:flex.f\\:flex-col.f\\:gap-3")
-                    rows_count = sls_rows.count()
-                    print(f"      Found {rows_count} SLS rows.")
-                    
-                    # Scrape SLS rows
-                    for j in range(rows_count):
-                        row = sls_rows.nth(j)
-                        sls_code = row.locator("div.f\\:font-semibold.f\\:text-foreground.f\\:text-sm").text_content().strip()
-                        tags = row.locator("div.f\\:flex.f\\:flex-wrap.f\\:items-center.f\\:gap-2 > div")
-                        tags_count = tags.count()
+                    # Loop through regions / SLS codes
+                    regions = item.get("regionSummary") or []
+                    for reg in regions:
+                        sls_code = reg.get("regionCode")
+                        if not sls_code:
+                            continue
+                        sls_code = sls_code.strip()
                         
                         key = (category, email, sls_code)
                         if key not in scraped_data_dict:
                             scraped_data_dict[key] = {col: 0 for col in status_columns}
                             
-                        for k in range(tags_count):
-                            tag = tags.nth(k)
-                            spans = tag.locator("span")
-                            if spans.count() >= 2:
-                                status_name = spans.nth(0).text_content().strip().upper()
-                                count = spans.nth(1).text_content().strip()
-                                if status_name in status_mapping:
-                                    scraped_data_dict[key][status_mapping[status_name]] = int(count)
-                                    
-                    # Collapse card
-                    card.click()
-                    try:
-                        content_panel.wait_for(state="hidden", timeout=5000)
-                    except Exception:
-                        pass
-                        
-                # Pagination: Go to next page
-                pagination_container = get_active_pagination(page)
-                next_btn = None
-                if pagination_container:
-                    next_btn = pagination_container.locator("a:has-text('Next'), button:has-text('Next')").first
+                        # Fill counts
+                        breakdowns = reg.get("statusBreakdown") or []
+                        for bd in breakdowns:
+                            raw_status = bd.get("status") or ""
+                            count = bd.get("count") or 0
+                            
+                            # Match status case-insensitively
+                            matched_col = status_mapping.get(raw_status.upper())
+                            if matched_col:
+                                scraped_data_dict[key][matched_col] = int(count)
+            except Exception as eval_err:
+                print(f"  Error fetching rekap for {category}: {eval_err}")
                 
-                is_disabled = False
-                if next_btn and next_btn.count() > 0:
-                    btn_class = next_btn.get_attribute("class") or ""
-                    btn_disabled = next_btn.get_attribute("disabled")
-                    aria_disabled = next_btn.get_attribute("aria-disabled")
-                    data_disabled = next_btn.get_attribute("data-disabled")
-                    
-                    classes = btn_class.split()
-                    is_pointer_events_none = False
-                    is_opacity_50 = False
-                    has_disabled_class = False
-                    for cls in classes:
-                        if 'pointer-events-none' in cls and 'disabled:' not in cls:
-                            is_pointer_events_none = True
-                        if 'opacity-50' in cls and 'disabled:' not in cls:
-                            is_opacity_50 = True
-                        if cls == 'disabled' or cls == 'f:disabled' or 'btn-disabled' in cls:
-                            has_disabled_class = True
-                    
-                    if (is_pointer_events_none or 
-                        is_opacity_50 or 
-                        has_disabled_class or 
-                        aria_disabled == 'true' or 
-                        data_disabled == 'true' or 
-                        data_disabled == '' or 
-                        btn_disabled is not None):
-                        is_disabled = True
-                        
-                if next_btn and next_btn.count() > 0 and next_btn.is_visible() and not is_disabled and prev_first_email:
-                    # Click next with retry
-                    clicked_ok = False
-                    for attempt in range(3):
-                        if attempt > 0:
-                            print(f"  Retrying next page click (attempt {attempt+1}/3)...")
-                        
-                        try:
-                            # Use a longer timeout (45s) for slow page transitions
-                            next_btn.click(timeout=45000)
-                        except Exception as e:
-                            print(f"  Click Next button failed or timed out (expected if disabled/last page): {e}")
-                            break
-                        
-                        # Wait for page transition
-                        start_time = time.time()
-                        page_changed = False
-                        while time.time() - start_time < 45.0:
-                            page.wait_for_timeout(500)
-                            
-                            # Check first email
-                            current_first_email_el = page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)").first
-                            current_first_email = ""
-                            if current_first_email_el.count() > 0:
-                                current_first_email = current_first_email_el.locator("div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm").text_content().strip()
-                                
-                            # Check pagination text
-                            cur_pag_el = get_active_pagination(page)
-                            current_pag_text = cur_pag_el.text_content().strip() if cur_pag_el and cur_pag_el.count() > 0 else ""
-                            
-                            if (current_first_email != prev_first_email and current_first_email != "") or (current_pag_text != prev_pag_text and current_pag_text != ""):
-                                page_changed = True
-                                break
-                                
-                        if page_changed:
-                            clicked_ok = True
-                            break
-                            
-                    if not clicked_ok:
-                        print("  Warning: Pagination transition timeout after retries. Breaking pagination loop.")
-                        break
-                        
-                    page_num += 1
-                    page.wait_for_timeout(1000)
-                else:
-                    print("  Reached the last page.")
-                    break
-            
-            # Save the last first email and pagination text for the next tab's transition check
-            last_first_el = page.locator("button:has(div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm)").first
-            last_first_email = last_first_el.locator("div.f\\:m-0.f\\:truncate.f\\:font-semibold.f\\:text-sm").text_content().strip() if last_first_el.count() > 0 else ""
-            
-            last_pag_el = get_active_pagination(page)
-            last_pag_text = last_pag_el.text_content().strip() if last_pag_el and last_pag_el.count() > 0 else ""
-                    
         # 3. Export to pivoted CSV
         print(f"\n--- Phase 3: Exporting pivoted data to '{output_csv}' ---")
         try:
@@ -358,6 +388,7 @@ def main():
             print(f"Error writing output CSV: {csv_err}")
             
         browser.close()
+        cleanup_chrome()
 
 if __name__ == "__main__":
     main()
