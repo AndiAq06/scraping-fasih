@@ -213,7 +213,7 @@ export default function DashboardPage() {
 
       // Fetch and parse ringkasan_Assign.csv
       try {
-        const assignResponse = await fetch("/ringkasan_Assign.csv");
+        const assignResponse = await fetch(`/ringkasan_Assign.csv?t=${Date.now()}`);
         if (assignResponse.ok) {
           const assignText = await assignResponse.text();
           const assignLines = assignText.split("\n").map(l => l.trim()).filter(Boolean);
@@ -235,7 +235,7 @@ export default function DashboardPage() {
 
       // Fetch and parse ringkasan_Progres.csv
       try {
-        const progresResponse = await fetch("/ringkasan_Progres.csv");
+        const progresResponse = await fetch(`/ringkasan_Progres.csv?t=${Date.now()}`);
         if (progresResponse.ok) {
           const progresText = await progresResponse.text();
           const progresLines = progresText.split("\n").map(l => l.trim()).filter(Boolean);
@@ -268,7 +268,7 @@ export default function DashboardPage() {
         console.warn("Gagal memuat ringkasan_Progres.csv, menggunakan data detail sebagai fallback:", e);
       }
       
-      const response = await fetch("/update_data.csv");
+      const response = await fetch(`/update_data.csv?t=${Date.now()}`);
       if (!response.ok) {
         throw new Error("Gagal mengambil file update_data.csv. Pastikan file data hasil scrape tersedia.");
       }
@@ -334,7 +334,7 @@ export default function DashboardPage() {
 
       // Fetch and parse dashboard_scraped_data.csv for Kecamatan realization ranking
       try {
-        const dashboardResponse = await fetch("/dashboard_scraped_data.csv");
+        const dashboardResponse = await fetch(`/dashboard_scraped_data.csv?t=${Date.now()}`);
         if (dashboardResponse.ok) {
           const dashboardText = await dashboardResponse.text();
           const parsedDashboard = parseDashboardScrapedCSV(dashboardText);
@@ -347,7 +347,7 @@ export default function DashboardPage() {
       // Set last updated time from text file, with fallback
       let loadedTimestamp = "";
       try {
-        const timeResponse = await fetch("/last_updated.txt");
+        const timeResponse = await fetch(`/last_updated.txt?t=${Date.now()}`);
         if (timeResponse.ok) {
           loadedTimestamp = (await timeResponse.text()).trim();
         }

@@ -119,7 +119,7 @@ export default function PetugasPage() {
       setLoading(true);
       setError(null);
 
-      const response = await fetch("/dashboard_scraped_data.csv");
+      const response = await fetch(`/dashboard_scraped_data.csv?t=${Date.now()}`);
       if (!response.ok) {
         throw new Error("Gagal mengambil data dashboard_scraped_data.csv. Jalankan pipeline data telebih dahulu.");
       }
@@ -130,7 +130,7 @@ export default function PetugasPage() {
 
       // Fetch last updated timestamp
       try {
-        const timeResponse = await fetch("/last_updated.txt");
+        const timeResponse = await fetch(`/last_updated.txt?t=${Date.now()}`);
         if (timeResponse.ok) {
           const loadedTimestamp = (await timeResponse.text()).trim();
           setLastUpdated(loadedTimestamp);

@@ -345,34 +345,12 @@ def process_dashboard_scraped_data(priority_sls=None):
         sls_14 = sls_16[:14]
         is_prioritas = "Ya" if sls_14 in priority_sls else "Tidak"
         
-        # A. Create Pencacah row
-        ppl_key = ('pencacah', ppl_email, sls_16)
-        if ppl_key in scraped_counts:
-            counts = scraped_counts[ppl_key]
-        else:
-            # Initialize with target capacity as OPEN
-            counts = {
-                "OPEN": muatan,
-                "DRAFT": 0,
-                "SUBMITTED BY Pencacah": 0,
-                "REJECTED BY Pengawas": 0,
-                "APPROVED BY Pengawas": 0
-            }
-        
-        ppl_row = [
-            "Pencacah", ppl_email, sls_16,
-            str(counts["OPEN"]), str(counts["DRAFT"]), str(counts["SUBMITTED BY Pencacah"]),
-            str(counts["REJECTED BY Pengawas"]), str(counts["APPROVED BY Pengawas"]),
-            ppl_name, "PPL", nama_kec, koseka, is_prioritas, str(muatan)
-        ]
-        aligned_rows.append(ppl_row)
-        
-        # B. Create Pengawas row
+        # Get PML/Pengawas progress counts first
         pml_key = ('pengawas', pml_email, sls_16)
         if pml_key in scraped_counts:
-            counts = scraped_counts[pml_key]
+            pml_counts = scraped_counts[pml_key]
         else:
-            counts = {
+            pml_counts = {
                 "OPEN": muatan,
                 "DRAFT": 0,
                 "SUBMITTED BY Pencacah": 0,
@@ -380,10 +358,31 @@ def process_dashboard_scraped_data(priority_sls=None):
                 "APPROVED BY Pengawas": 0
             }
             
+        # Get Pencacah progress counts, falling back to PML counts (since Pencacah progress is tracked under supervisor)
+        ppl_key = ('pencacah', ppl_email, sls_16)
+        if ppl_key in scraped_counts:
+            ppl_counts = scraped_counts[ppl_key]
+            # Fall back to PML counts if Pencacah progress counts are all zero
+            if (ppl_counts.get("DRAFT", 0) == 0 and 
+                ppl_counts.get("SUBMITTED BY Pencacah", 0) == 0 and 
+                ppl_counts.get("REJECTED BY Pengawas", 0) == 0 and 
+                ppl_counts.get("APPROVED BY Pengawas", 0) == 0):
+                ppl_counts = pml_counts
+        else:
+            ppl_counts = pml_counts
+            
+        ppl_row = [
+            "Pencacah", ppl_email, sls_16,
+            str(ppl_counts["OPEN"]), str(ppl_counts["DRAFT"]), str(ppl_counts["SUBMITTED BY Pencacah"]),
+            str(ppl_counts["REJECTED BY Pengawas"]), str(ppl_counts["APPROVED BY Pengawas"]),
+            ppl_name, "PPL", nama_kec, koseka, is_prioritas, str(muatan)
+        ]
+        aligned_rows.append(ppl_row)
+        
         pml_row = [
             "Pengawas", pml_email, sls_16,
-            str(counts["OPEN"]), str(counts["DRAFT"]), str(counts["SUBMITTED BY Pencacah"]),
-            str(counts["REJECTED BY Pengawas"]), str(counts["APPROVED BY Pengawas"]),
+            str(pml_counts["OPEN"]), str(pml_counts["DRAFT"]), str(pml_counts["SUBMITTED BY Pencacah"]),
+            str(pml_counts["REJECTED BY Pengawas"]), str(pml_counts["APPROVED BY Pengawas"]),
             pml_name, "PML", nama_kec, koseka, is_prioritas, str(muatan)
         ]
         aligned_rows.append(pml_row)
@@ -813,7 +812,7 @@ def get_dashboard_html_template():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Toraja Utara - Sensus Ekonomi 2026</title>
+    <title>DASHBOARD SE2026 BPS TORAJA UTARA</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -1383,7 +1382,7 @@ def get_dashboard_html_template():
                         <path d="M3 3v18h18"/>
                         <path d="m19 9-5 5-4-4-3 3"/>
                     </svg>
-                    TORAJA UTARA - SENSUS EKONOMI 2026
+                    DASHBOARD SE2026 BPS TORAJA UTARA
                 </h1>
                 <p>Dashboard Monitoring Progress Lapangan - Hasil Scraping FASIH</p>
             </div>

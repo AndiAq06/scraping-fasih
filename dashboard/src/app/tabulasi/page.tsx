@@ -195,14 +195,14 @@ export default function TabulasiPage() {
       setError(null);
 
       // Fetch update_data.csv
-      const dataResponse = await fetch("/update_data.csv");
+      const dataResponse = await fetch(`/update_data.csv?t=${Date.now()}`);
       if (!dataResponse.ok) {
         throw new Error("Gagal mengambil file update_data.csv. Pastikan pipeline data sudah dijalankan.");
       }
       const dataText = await dataResponse.text();
 
       // Fetch pml_ppl.csv
-      const pmlPplResponse = await fetch("/pml_ppl.csv");
+      const pmlPplResponse = await fetch(`/pml_ppl.csv?t=${Date.now()}`);
       if (!pmlPplResponse.ok) {
         throw new Error("Gagal mengambil file pml_ppl.csv.");
       }
@@ -252,7 +252,7 @@ export default function TabulasiPage() {
         return parsed;
       };
 
-      // Parse pml_ppl.csv (semicolon delimited)
+      // Parse pml_ppl.csv (comma delimited, quote-aware)
       const parsePMLPPL = (csvText: string): PMLPPLRecord[] => {
         const lines = csvText.split("\n");
         const parsed: PMLPPLRecord[] = [];
@@ -261,13 +261,29 @@ export default function TabulasiPage() {
           const line = lines[i].trim();
           if (!line) continue;
 
-          const parts = line.split(";");
-          if (parts.length >= 4) {
+          const row: string[] = [];
+          let insideQuote = false;
+          let entry = "";
+
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            if (char === '"') {
+              insideQuote = !insideQuote;
+            } else if (char === "," && !insideQuote) {
+              row.push(entry);
+              entry = "";
+            } else {
+              entry += char;
+            }
+          }
+          row.push(entry);
+
+          if (row.length >= 4) {
             parsed.push({
-              nama_petugas: parts[0].replace(/"/g, "").trim(),
-              kec: parts[1].replace(/"/g, "").trim(),
-              jabatan_petugas: parts[2].replace(/"/g, "").trim().toUpperCase(),
-              email: parts[3].replace(/"/g, "").trim().toLowerCase(),
+              nama_petugas: row[0].replace(/"/g, "").trim(),
+              kec: row[1].replace(/"/g, "").trim(),
+              jabatan_petugas: row[2].replace(/"/g, "").trim().toUpperCase(),
+              email: row[3].replace(/"/g, "").trim().toLowerCase(),
             });
           }
         }
@@ -283,7 +299,7 @@ export default function TabulasiPage() {
       // Load timestamp
       let loadedTimestamp = "";
       try {
-        const timeResponse = await fetch("/last_updated.txt");
+        const timeResponse = await fetch(`/last_updated.txt?t=${Date.now()}`);
         if (timeResponse.ok) {
           loadedTimestamp = (await timeResponse.text()).trim();
         }
