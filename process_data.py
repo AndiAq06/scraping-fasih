@@ -228,9 +228,15 @@ def load_excel_wilkerstat_kk_usaha():
 def normalize_name(name):
     if not name:
         return ""
-    n = name.lower().strip()
+    # Split by comma to strip academic degrees / suffixes
+    n = name.split(",")[0]
+    n = n.lower().strip()
     n = n.replace("yusuf tandi", "yusup tandi")
+    # Clean special characters and normalize whitespace
+    n = n.replace(".", "").replace("'", "").replace("`", "")
+    n = " ".join(n.split())
     return n
+
 
 def process_dashboard_scraped_data(priority_sls=None):
     if priority_sls is None:
