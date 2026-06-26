@@ -27,3 +27,10 @@ Thumbs.db
 .antigravitycli/
 .gemini/
 AGENT.md
+
+# Browser & Scraper Logs
+chrome_profile/
+temp_chrome_profile/
+dashboard_intercepted.json
+intercepted_log.json
+~$*.xlsx

@@ -36,6 +36,8 @@ interface ScraperRecord {
   nama_kec: string;
   koseka: string;
   isPrioritas: string;
+  kkWilkerstat: number;
+  usahaWilkerstat: number;
 }
 
 interface PMLPPLRecord {
@@ -78,6 +80,10 @@ interface SLSStats {
   isPrioritas: boolean;
   categories: { [category: string]: CellStats };
   total: CellStats;
+  approveKeluarga: number;
+  approveUsaha: number;
+  kkWilkerstat: number;
+  usahaWilkerstat: number;
 }
 
 const normalizeScale = (scaleStr: string): string => {
@@ -246,6 +252,8 @@ export default function TabulasiPage() {
               nama_kec: row[16] ? row[16].replace(/"/g, "").trim() : "",
               koseka: row[17] ? row[17].replace(/"/g, "").trim() : "",
               isPrioritas: row[18] ? row[18].replace(/"/g, "").trim() : "Tidak",
+              kkWilkerstat: row[19] ? parseInt(row[19].replace(/"/g, "").trim()) || 0 : 0,
+              usahaWilkerstat: row[20] ? parseInt(row[20].replace(/"/g, "").trim()) || 0 : 0,
             });
           }
         }
@@ -610,7 +618,11 @@ export default function TabulasiPage() {
           koseka: r.koseka,
           isPrioritas: r.isPrioritas === "Ya",
           categories: {},
-          total: createEmptyCellStats()
+          total: createEmptyCellStats(),
+          approveKeluarga: 0,
+          approveUsaha: 0,
+          kkWilkerstat: r.kkWilkerstat || 0,
+          usahaWilkerstat: r.usahaWilkerstat || 0
         };
         categories.forEach(cat => {
           statsMap[slsCode].categories[cat] = createEmptyCellStats();
@@ -641,6 +653,15 @@ export default function TabulasiPage() {
         addStats(statsMap[slsCode].categories[cat]);
       }
       addStats(statsMap[slsCode].total);
+
+      // Add to counts if status is approve
+      if (isApprove) {
+        if (cat === "Keluarga") {
+          statsMap[slsCode].approveKeluarga++;
+        } else {
+          statsMap[slsCode].approveUsaha++;
+        }
+      }
     });
 
     return Object.values(statsMap).sort((a, b) => a.slsCode.localeCompare(b.slsCode));
@@ -660,7 +681,11 @@ export default function TabulasiPage() {
 
   // Overview stats for SLS tab (prevents double counting)
   const selectedSlsOverviewStats = useMemo(() => {
-    const totalStats = createEmptyCellStats();
+    const totalStats = {
+      ...createEmptyCellStats(),
+      approveKeluarga: 0,
+      approveUsaha: 0
+    };
 
     filteredSlsStats.forEach(sls => {
       const t = sls.total;
@@ -671,6 +696,8 @@ export default function TabulasiPage() {
       totalStats.submit += t.submit;
       totalStats.approve += t.approve;
       totalStats.reject += t.reject;
+      totalStats.approveKeluarga += sls.approveKeluarga;
+      totalStats.approveUsaha += sls.approveUsaha;
     });
 
     const completionRate = totalStats.target > 0 ? (totalStats.realisasi / totalStats.target) * 100 : 0;
@@ -1308,7 +1335,7 @@ export default function TabulasiPage() {
               )}
 
               {activeTab === "sls" && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-100 dark:border-slate-800">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mt-6 pt-6 border-t border-slate-100 dark:border-slate-800">
                   <div className="bg-slate-50 dark:bg-slate-950/50 p-4 rounded-xl border border-slate-100 dark:border-slate-900/50">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Total SLS Tampil</span>
                     <span className="text-xl font-extrabold text-slate-900 dark:text-white mt-1 block">{filteredSlsStats.length} SLS</span>
@@ -1320,6 +1347,17 @@ export default function TabulasiPage() {
                   <div className="bg-slate-50 dark:bg-slate-950/50 p-4 rounded-xl border border-slate-100 dark:border-slate-900/50">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Total Realisasi</span>
                     <span className="text-xl font-extrabold text-emerald-500 mt-1 block">{selectedSlsOverviewStats.realisasi.toLocaleString("id-ID")}</span>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-950/50 p-4 rounded-xl border border-slate-100 dark:border-slate-900/50">
+                    <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Total Approved</span>
+                    <div className="flex flex-col gap-0.5 mt-1">
+                      <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                        Keluarga: <span className="font-extrabold text-emerald-500">{selectedSlsOverviewStats.approveKeluarga.toLocaleString("id-ID")}</span>
+                      </span>
+                      <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                        Usaha: <span className="font-extrabold text-blue-500">{selectedSlsOverviewStats.approveUsaha.toLocaleString("id-ID")}</span>
+                      </span>
+                    </div>
                   </div>
                   <div className="bg-slate-50 dark:bg-slate-950/50 p-4 rounded-xl border border-slate-100 dark:border-slate-900/50">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Persentase Selesai</span>
@@ -1539,6 +1577,22 @@ export default function TabulasiPage() {
                                   )}
                                 </div>
                                 <div className="text-[10px] text-slate-400 font-normal mt-0.5">{sls.kec} • Koseka: {sls.koseka}</div>
+                                <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold">
+                                  <span className="inline-flex px-1.5 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-900/30">
+                                    Keluarga Approved: {sls.approveKeluarga}
+                                  </span>
+                                  <span className="inline-flex px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-900/30">
+                                    Usaha Approved: {sls.approveUsaha}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex flex-wrap gap-1.5 text-[9px] font-bold">
+                                  <span className="inline-flex px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                    KK Wilkerstat: {sls.kkWilkerstat}
+                                  </span>
+                                  <span className="inline-flex px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                    Usaha Wilkerstat: {sls.usahaWilkerstat}
+                                  </span>
+                                </div>
                               </td>
 
                               {/* Category cells */}

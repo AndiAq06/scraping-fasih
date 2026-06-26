@@ -170,6 +170,52 @@ def load_muatan_wilkerstat():
             
     return muatan_map
 
+def load_excel_wilkerstat_kk_usaha():
+    excel_file = "msubsls_25_2_7326(Sheet 1).xlsx"
+    excel_wilkerstat_map = {}
+    if not os.path.exists(excel_file):
+        excel_file = os.path.join("data", "msubsls_25_2_7326(Sheet 1).xlsx")
+        
+    if os.path.exists(excel_file):
+        try:
+            import pandas as pd
+            df_excel = pd.read_excel(excel_file)
+            for _, row in df_excel.iterrows():
+                id_sub = row.get('idsubsls')
+                if pd.notna(id_sub):
+                    try:
+                        # Convert float to clean 16-digit string
+                        sls_16 = f"{int(float(id_sub)):016d}"
+                    except (ValueError, TypeError):
+                        sls_16 = "".join([c for c in str(id_sub) if c.isdigit()])[:16]
+                    
+                    kk_val = 0
+                    if pd.notna(row.get('jumlah_kk')):
+                        try:
+                            kk_val = int(float(row['jumlah_kk']))
+                        except ValueError:
+                            pass
+                            
+                    usaha_val = 0
+                    if pd.notna(row.get('jumlah_usaha')):
+                        try:
+                            # Safely handle non-numeric values in jumlah_usaha
+                            usaha_val = int(float(row['jumlah_usaha']))
+                        except (ValueError, TypeError):
+                            pass
+                            
+                    excel_wilkerstat_map[sls_16] = {
+                        'jumlah_kk': kk_val,
+                        'jumlah_usaha': usaha_val
+                    }
+            print(f"Loaded {len(excel_wilkerstat_map)} SLS KK/Usaha mappings from Excel '{excel_file}'.")
+        except Exception as e:
+            print(f"Warning: Failed to parse '{excel_file}' for KK/Usaha counts: {e}")
+    else:
+        print(f"Warning: Excel file '{excel_file}' not found.")
+        
+    return excel_wilkerstat_map
+
 def normalize_name(name):
     if not name:
         return ""
@@ -313,15 +359,54 @@ def process_dashboard_scraped_data(priority_sls=None):
     except Exception as e:
         print(f"Warning loading existing scraped counts: {e}")
 
-    # 5. Build clean, aligned data based on Toraja Utara master list (wilkerstat_map)
+    # 4b. Parse update_data.csv to calculate approved Keluarga and approved Usaha counts per SLS
+    sls_approve_map = {}
+    update_data_file = "update_data.csv"
+    if os.path.exists(update_data_file):
+        try:
+            with open(update_data_file, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader)
+                id_idx = headers.index("Kode Identitas") if "Kode Identitas" in headers else 1
+                status_idx = headers.index("Status") if "Status" in headers else 12
+                scale_idx = headers.index("Skala Usaha / Jenis Prelist") if "Skala Usaha / Jenis Prelist" in headers else 7
+                
+                for row in reader:
+                    if len(row) > max(id_idx, status_idx, scale_idx):
+                        id_code = row[id_idx].strip()
+                        status = row[status_idx].strip().lower()
+                        scale = row[scale_idx].strip()
+                        
+                        digits_only = "".join([c for c in id_code if c.isdigit()])
+                        sls_16 = digits_only[:16]
+                        
+                        if sls_16:
+                            if sls_16 not in sls_approve_map:
+                                sls_approve_map[sls_16] = {'keluarga': 0, 'usaha': 0}
+                            
+                            is_approve = status in ["approved by pengawas", "approved", "approve"]
+                            if is_approve:
+                                if scale == "Keluarga":
+                                    sls_approve_map[sls_16]['keluarga'] += 1
+                                else:
+                                    sls_approve_map[sls_16]['usaha'] += 1
+            print(f"Computed approved Keluarga/Usaha counts for {len(sls_approve_map)} SLS codes from '{update_data_file}'.")
+        except Exception as e:
+            print(f"Warning: Failed to parse '{update_data_file}' for SLS approved counts: {e}")
+
+    # 5. Load KK and Usaha Wilkerstat counts from Excel file
+    excel_map = load_excel_wilkerstat_kk_usaha()
+
+    # 6. Build clean, aligned data based on Toraja Utara master list (wilkerstat_map)
     print("Aligning and building aligned dashboard rows...")
     aligned_rows = []
     
-    # We output exactly the 14 headers:
+    # We output exactly the 18 headers:
     output_headers = [
         "Category", "Email", "SLS Code", 
         "OPEN", "DRAFT", "SUBMITTED BY Pencacah", "REJECTED BY Pengawas", "APPROVED BY Pengawas",
-        "nama_petugas", "jabatan_petugas", "nama_kec", "koseka", "is_prioritas", "muatan_wilkerstat"
+        "nama_petugas", "jabatan_petugas", "nama_kec", "koseka", "is_prioritas", "muatan_wilkerstat",
+        "approve_keluarga", "approve_usaha", "kk_wilkerstat", "usaha_wilkerstat"
     ]
     
     for sls_16, details in wilkerstat_map.items():
@@ -371,11 +456,20 @@ def process_dashboard_scraped_data(priority_sls=None):
         else:
             ppl_counts = pml_counts
             
+        sls_ap = sls_approve_map.get(sls_16, {'keluarga': 0, 'usaha': 0})
+        app_kel = sls_ap['keluarga']
+        app_us = sls_ap['usaha']
+        
+        excel_ap = excel_map.get(sls_16, {'jumlah_kk': 0, 'jumlah_usaha': 0})
+        kk_wilk = excel_ap['jumlah_kk']
+        us_wilk = excel_ap['jumlah_usaha']
+
         ppl_row = [
             "Pencacah", ppl_email, sls_16,
             str(ppl_counts["OPEN"]), str(ppl_counts["DRAFT"]), str(ppl_counts["SUBMITTED BY Pencacah"]),
             str(ppl_counts["REJECTED BY Pengawas"]), str(ppl_counts["APPROVED BY Pengawas"]),
-            ppl_name, "PPL", nama_kec, koseka, is_prioritas, str(muatan)
+            ppl_name, "PPL", nama_kec, koseka, is_prioritas, str(muatan),
+            str(app_kel), str(app_us), str(kk_wilk), str(us_wilk)
         ]
         aligned_rows.append(ppl_row)
         
@@ -383,7 +477,8 @@ def process_dashboard_scraped_data(priority_sls=None):
             "Pengawas", pml_email, sls_16,
             str(pml_counts["OPEN"]), str(pml_counts["DRAFT"]), str(pml_counts["SUBMITTED BY Pencacah"]),
             str(pml_counts["REJECTED BY Pengawas"]), str(pml_counts["APPROVED BY Pengawas"]),
-            pml_name, "PML", nama_kec, koseka, is_prioritas, str(muatan)
+            pml_name, "PML", nama_kec, koseka, is_prioritas, str(muatan),
+            str(app_kel), str(app_us), str(kk_wilk), str(us_wilk)
         ]
         aligned_rows.append(pml_row)
         
@@ -442,6 +537,9 @@ def process_data():
     # Load Wilkerstat capacity mapping for Toraja Utara
     wilkerstat_map = load_muatan_wilkerstat()
 
+    # Load Excel Wilkerstat KK/Usaha mapping
+    excel_map = load_excel_wilkerstat_kk_usaha()
+
     # 2. Process scraped_data.csv and merge with existing output_file
     print(f"Processing, mapping, and merging '{scraped_file}'...")
     rows_written = 0
@@ -487,7 +585,7 @@ def process_data():
             reader = csv.reader(infile)
             try:
                 new_headers = next(reader)
-                headers = new_headers + ['nama_kec', 'koseka', 'is_prioritas']
+                headers = new_headers + ['nama_kec', 'koseka', 'is_prioritas', 'kk_wilkerstat', 'usaha_wilkerstat']
                 if 'Kode Identitas' in new_headers:
                     new_id_code_idx = new_headers.index('Kode Identitas')
                 else:
@@ -535,7 +633,7 @@ def process_data():
                 
         print(f"Scraped data processed: {updated_rows_count} records updated, {new_rows_count} new records added (filtered for Toraja Utara).")
         
-        # Prepare list of rows to write and normalize columns to exactly 19 (16 base + 3 extra)
+        # Prepare list of rows to write and normalize columns to exactly 21 (16 base + 5 extra)
         rows_to_write = []
         for id_code, row in existing_data.items():
             base_row = row[:16]
@@ -545,6 +643,7 @@ def process_data():
             digits_only = "".join([c for c in id_code if c.isdigit()])
             kd_kec_7 = digits_only[:7]
             sls_14 = digits_only[:14]
+            sls_16 = digits_only[:16]
             
             nama_kec = ""
             koseka = ""
@@ -553,7 +652,12 @@ def process_data():
                 koseka = koseka_map[kd_kec_7]['koseka']
                 
             is_prioritas = "Ya" if sls_14 in priority_sls else "Tidak"
-            rows_to_write.append(base_row + [nama_kec, koseka, is_prioritas])
+            
+            excel_vals = excel_map.get(sls_16, {'jumlah_kk': 0, 'jumlah_usaha': 0})
+            kk_val = excel_vals['jumlah_kk']
+            usaha_val = excel_vals['jumlah_usaha']
+            
+            rows_to_write.append(base_row + [nama_kec, koseka, is_prioritas, str(kk_val), str(usaha_val)])
         
         # Write merged/updated records back to update_data.csv
         with open(output_file, mode='w', newline='', encoding='utf-8') as outfile:
@@ -564,9 +668,9 @@ def process_data():
         rows_written = len(rows_to_write)
         print(f"Successfully merged and created '{output_file}' with {rows_written} rows.")
         
-        # Also write the merged raw data back to scraped_data.csv (excluding the last three columns: nama_kec, koseka, is_prioritas)
-        raw_headers = headers[:-3] if len(headers) > 3 else headers
-        raw_rows = [row[:-3] if len(row) > 3 else row for row in rows_to_write]
+        # Also write the merged raw data back to scraped_data.csv (excluding the last five columns: nama_kec, koseka, is_prioritas, kk_wilkerstat, usaha_wilkerstat)
+        raw_headers = headers[:-5] if len(headers) > 5 else headers
+        raw_rows = [row[:-5] if len(row) > 5 else row for row in rows_to_write]
         
         with open(scraped_file, mode='w', newline='', encoding='utf-8') as sf:
             writer = csv.writer(sf)
@@ -650,7 +754,7 @@ def generate_local_dashboard():
                 reader = csv.DictReader(f)
                 for row in reader:
                     # Clean and parse numeric values
-                    for col in ["OPEN", "DRAFT", "SUBMITTED BY Pencacah", "REJECTED BY Pengawas", "APPROVED BY Pengawas", "muatan_wilkerstat"]:
+                    for col in ["OPEN", "DRAFT", "SUBMITTED BY Pencacah", "REJECTED BY Pengawas", "APPROVED BY Pengawas", "muatan_wilkerstat", "approve_keluarga", "approve_usaha", "kk_wilkerstat", "usaha_wilkerstat"]:
                         if col in row:
                             try:
                                 row[col] = int(row[col])
@@ -725,7 +829,11 @@ def generate_local_dashboard():
                 "nama_kec": nama_kec,
                 "koseka": "",
                 "is_prioritas": "Tidak",
-                "muatan_wilkerstat": 0
+                "muatan_wilkerstat": 0,
+                "approve_keluarga": 0,
+                "approve_usaha": 0,
+                "kk_wilkerstat": 0,
+                "usaha_wilkerstat": 0
             }
             scraped_data.append(blank_row)
             missing_count += 1
@@ -1456,6 +1564,10 @@ def get_dashboard_html_template():
                 <div>
                     <div class="kpi-title">APPROVED PML</div>
                     <div class="kpi-value txt-approved" id="kpiApproved">0</div>
+                    <div style="font-size: 0.75rem; margin-top: 4px; color: var(--text-muted); display: flex; flex-direction: column; gap: 2px;">
+                        <span>Keluarga: <strong id="kpiApprovedKeluarga" style="color: #059669;">0</strong></span>
+                        <span>Usaha: <strong id="kpiApprovedUsaha" style="color: #0284c7;">0</strong></span>
+                    </div>
                 </div>
                 <div class="kpi-indicator indicator-approved">
                     <span class="kpi-dot bg-approved"></span> Bersih / Selesai
@@ -1618,7 +1730,8 @@ def get_dashboard_html_template():
         // Numeric fields to default sort descending on first click
         const numericFields = [
             'total_sls', 'muatan', 'OPEN', 'DRAFT', 'SUBMITTED', 'REJECTED', 'APPROVED', 'progress_rate',
-            'muatan_wilkerstat', 'SUBMITTED BY Pencacah', 'REJECTED BY Pengawas', 'APPROVED BY Pengawas'
+            'muatan_wilkerstat', 'SUBMITTED BY Pencacah', 'REJECTED BY Pengawas', 'APPROVED BY Pengawas',
+            'kk_wilkerstat', 'usaha_wilkerstat'
         ];
         
         // Pagination state for Detail SLS
@@ -1709,7 +1822,9 @@ def get_dashboard_html_template():
                             SUBMITTED: parseInt(row["SUBMITTED BY Pencacah"]) || 0,
                             REJECTED: parseInt(row["REJECTED BY Pengawas"]) || 0,
                             APPROVED: parseInt(row["APPROVED BY Pengawas"]) || 0,
-                            muatan: parseInt(row.muatan_wilkerstat) || 0
+                            muatan: parseInt(row.muatan_wilkerstat) || 0,
+                            approve_keluarga: parseInt(row.approve_keluarga) || 0,
+                            approve_usaha: parseInt(row.approve_usaha) || 0
                         });
                     }
                 }
@@ -1721,6 +1836,8 @@ def get_dashboard_html_template():
             let totalRejected = 0;
             let totalApproved = 0;
             let totalMuatan = 0;
+            let totalAppKeluarga = 0;
+            let totalAppUsaha = 0;
             
             uniqueSlsMap.forEach(val => {
                 totalOpen += val.OPEN;
@@ -1729,6 +1846,8 @@ def get_dashboard_html_template():
                 totalRejected += val.REJECTED;
                 totalApproved += val.APPROVED;
                 totalMuatan += val.muatan;
+                totalAppKeluarga += val.approve_keluarga;
+                totalAppUsaha += val.approve_usaha;
             });
             
             // Get values from official progresData if available, otherwise fallback to sums
@@ -1748,6 +1867,14 @@ def get_dashboard_html_template():
             document.getElementById('kpiSubmitted').textContent = valSubmitted.toLocaleString('id-ID');
             document.getElementById('kpiRejected').textContent = valRejected.toLocaleString('id-ID');
             document.getElementById('kpiApproved').textContent = valApproved.toLocaleString('id-ID');
+            
+            // Update approved breakdown
+            if (document.getElementById('kpiApprovedKeluarga')) {
+                document.getElementById('kpiApprovedKeluarga').textContent = totalAppKeluarga.toLocaleString('id-ID');
+            }
+            if (document.getElementById('kpiApprovedUsaha')) {
+                document.getElementById('kpiApprovedUsaha').textContent = totalAppUsaha.toLocaleString('id-ID');
+            }
             
             // Progress Calculation
             const completed = valApproved + valSubmitted + valRejected;
@@ -2116,8 +2243,6 @@ def get_dashboard_html_template():
             filteredData.forEach(row => {
                 const slsCode = row["SLS Code"];
                 if (!slsCode) {
-                    const key = "blank_" + row.Email;
-                    uniqueDetailMap.set(key, row);
                     return;
                 }
                 if (!uniqueDetailMap.has(slsCode)) {
@@ -2178,6 +2303,8 @@ def get_dashboard_html_template():
                                     <th onclick="handleDetSort('Category')">Peran ${getSortArrow('Category', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('nama_kec')">Kecamatan ${getSortArrow('nama_kec', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('is_prioritas')">Prioritas ${getSortArrow('is_prioritas', sortDetField, sortDetAsc)}</th>
+                                    <th onclick="handleDetSort('kk_wilkerstat')">KK Wilkerstat ${getSortArrow('kk_wilkerstat', sortDetField, sortDetAsc)}</th>
+                                    <th onclick="handleDetSort('usaha_wilkerstat')">Usaha Wilkerstat ${getSortArrow('usaha_wilkerstat', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('muatan_wilkerstat')">Muatan ${getSortArrow('muatan_wilkerstat', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('OPEN')">Open ${getSortArrow('OPEN', sortDetField, sortDetAsc)}</th>
                                     <th onclick="handleDetSort('DRAFT')">Draft ${getSortArrow('DRAFT', sortDetField, sortDetAsc)}</th>
@@ -2198,11 +2325,23 @@ def get_dashboard_html_template():
                 html += `
                     <tr>
                         <td>${startIndex + idx + 1}</td>
-                        <td style="font-family: monospace; font-weight: 600; color: #334155">${row["SLS Code"]}</td>
+                        <td style="font-family: monospace; font-weight: 600; color: #334155">
+                            <div>${row["SLS Code"] || '-'}</div>
+                            <div style="margin-top: 4px; display: flex; gap: 4px; font-size: 9px; font-weight: bold; flex-wrap: wrap;">
+                                <span style="background-color: #ecfdf5; color: #059669; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(5,150,105,0.1); white-space: nowrap;">
+                                    Keluarga Approved: ${row.approve_keluarga || 0}
+                                </span>
+                                <span style="background-color: #f0f9ff; color: #0284c7; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(2,132,199,0.1); white-space: nowrap;">
+                                    Usaha Approved: ${row.approve_usaha || 0}
+                                </span>
+                            </div>
+                        </td>
                         <td style="font-weight: 500; color: var(--primary)">${row.nama_petugas || '-'}</td>
                         <td><span class="badge badge-role">${getNormalizedRole(row)}</span></td>
                         <td>${row.nama_kec || '-'}</td>
                         <td>${priorBadge}</td>
+                        <td>${row.kk_wilkerstat || 0}</td>
+                        <td>${row.usaha_wilkerstat || 0}</td>
                         <td>${row.muatan_wilkerstat}</td>
                         <td class="txt-open">${row.OPEN}</td>
                         <td class="txt-draft">${row.DRAFT}</td>
