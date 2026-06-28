@@ -830,6 +830,7 @@ def run_unified_scraper():
 
             # 7. Scrape Detail Data Mitra
             print(f"Loaded {len(emails)} emails to scrape.")
+            failed_emails = []
             for index in range(resume_index, len(emails)):
                 email = emails[index]
                 print(f"[{index + 1}/{len(emails)}] Fetching detail via API for: {email}")
@@ -839,7 +840,7 @@ def run_unified_scraper():
                     delay_seconds = random.uniform(0.5, 1.2)
                     time.sleep(delay_seconds)
                 
-                attempts = 2
+                attempts = 3
                 success = False
                 
                 for attempt in range(1, attempts + 1):
@@ -889,8 +890,10 @@ def run_unified_scraper():
                                 page.wait_for_selector("table", timeout=45000)
                             except Exception:
                                 pass
+                            time.sleep(attempt * 2)
                         else:
-                            print(f"  Failed to process {email} after {attempts} attempts.")
+                            print(f"  Failed to process {email} after {attempts} attempts. Will retry at the end.")
+                            failed_emails.append(email)
                 
                 # Save checkpoint
                 try:
@@ -898,6 +901,81 @@ def run_unified_scraper():
                         json.dump({"last_index": index, "last_email": email, "reverse_order": reverse_order}, f)
                 except Exception as e:
                     print(f"Warning saving checkpoint: {e}")
+
+            # 7b. Retry failed emails at the end until all are successfully retrieved
+            if failed_emails:
+                print(f"\n--- Phase 3b: Retrying {len(failed_emails)} failed emails at the end ---")
+                retry_round = 1
+                while failed_emails:
+                    print(f"\nRetry Round #{retry_round} for {len(failed_emails)} remaining emails...")
+                    still_failed = []
+                    for idx, email in enumerate(failed_emails):
+                        print(f"[{idx + 1}/{len(failed_emails)}] Retrying: {email}")
+                        
+                        # Small delay between retry requests
+                        delay_seconds = random.uniform(1.0, 2.0)
+                        time.sleep(delay_seconds)
+                        
+                        success = False
+                        attempts = 3
+                        for attempt in range(1, attempts + 1):
+                            if attempt > 1:
+                                print(f"  [Retry] Retry attempt #{attempt} for {email}...")
+                            try:
+                                records = page.evaluate(js_fetch_script, {"email": email, "periodId": period_id})
+                                
+                                total_scraped = 0
+                                for item in records:
+                                    code_identity = item.get("codeIdentity") or "-"
+                                    data1 = item.get("data1") or "-"
+                                    data2 = item.get("data2") or "-"
+                                    data3 = item.get("data3") or "-"
+                                    data4 = item.get("data4") or "-"
+                                    data5 = item.get("data5") or "-"
+                                    data6 = item.get("data6") or "-"
+                                    data7 = item.get("data7") or "-"
+                                    data8 = item.get("data8") or "-"
+                                    data9 = item.get("data9") or "-"
+                                    data10 = item.get("data10") or "-"
+                                    status = (item.get("assignmentStatusAlias") or "open").lower()
+                                    
+                                    modes = item.get("mode") or []
+                                    mode = ", ".join(modes) if modes else "-"
+                                    
+                                    username = item.get("currentUserUsername") or ""
+                                    role_name = item.get("currentUserSurveyRoleName") or ""
+                                    petugas = f"{username}{role_name}" if username or role_name else "-"
+                                    
+                                    keterangan = "-"
+                                    
+                                    csv_writer.writerow([
+                                        email, code_identity, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10, status, mode, petugas, keterangan
+                                    ])
+                                    total_scraped += 1
+                                    
+                                csv_file.flush()
+                                print(f"  Finished search for {email}. Total: {total_scraped} rows.")
+                                success = True
+                                break
+                            except Exception as e:
+                                print(f"  Error retrying email {email} (Attempt {attempt}/{attempts}): {e}")
+                                # Reload page
+                                try:
+                                    page.goto(current_url)
+                                    page.wait_for_selector("table", timeout=45000)
+                                except Exception:
+                                    pass
+                                time.sleep(attempt * 2)
+                        
+                        if not success:
+                            still_failed.append(email)
+                    
+                    failed_emails = still_failed
+                    retry_round += 1
+                    if failed_emails:
+                        print(f"Round finished. {len(failed_emails)} emails still failed. Waiting 5 seconds before next round...")
+                        time.sleep(5)
+                print("All failed emails processed successfully!")
 
         # Cleanup detail csv and browser
         if run_mode in ["full", "data"]:
